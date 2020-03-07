@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/gorilla/css/scanner"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
@@ -129,6 +131,37 @@ func run() error {
 				}
 			}
 			f(doc)
+		} else if ext == ".css" {
+			var sb strings.Builder
+			io.Copy(&sb, io.TeeReader(res.Body, &buf))
+			sc := scanner.New(sb.String())
+			for {
+				token := sc.Next()
+				if token.Type == scanner.TokenEOF || token.Type == scanner.TokenError {
+					break
+				}
+				if token.Type == scanner.TokenURI {
+					value := strings.TrimPrefix(token.Value, "url(")
+					value = strings.TrimSuffix(value, ")")
+					value = strings.Trim(value, "\"")
+					value = strings.Trim(value, "'")
+					if strings.HasPrefix(value, "//") {
+						continue
+					}
+					if strings.HasPrefix(value, root) {
+						files = append(files, cleanUrl(value))
+						continue
+					}
+
+					if strings.HasPrefix(value, "/") || strings.HasPrefix(value, ".") {
+						ru, _ := url.Parse(root)
+						ru.Path = path.Join(path.Dir(ru.Path+file), value)
+						fmt.Println(ru.Path)
+						files = append(files, cleanUrl(ru.String()))
+						continue
+					}
+				}
+			}
 		} else {
 			io.Copy(&buf, res.Body)
 		}
