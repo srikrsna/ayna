@@ -31,6 +31,7 @@ func run() error {
 
 	root := os.Args[1]
 	root = strings.TrimSuffix(root, "/")
+	rurl, _ := url.Parse(root)
 	files := make([]string, 0, 100)
 	processed := make(map[string]bool)
 	files = append(files, root)
@@ -145,6 +146,11 @@ func run() error {
 					value = strings.TrimSuffix(value, ")")
 					value = strings.Trim(value, "\"")
 					value = strings.Trim(value, "'")
+					if strings.HasPrefix(value, "//"+rurl.Host) {
+						files = append(files, cleanUrl(rurl.Scheme+":"+value))
+						continue
+					}
+
 					if strings.HasPrefix(value, "//") {
 						continue
 					}
@@ -156,7 +162,6 @@ func run() error {
 					if strings.HasPrefix(value, "/") || strings.HasPrefix(value, ".") {
 						ru, _ := url.Parse(root)
 						ru.Path = path.Join(path.Dir(ru.Path+file), value)
-						fmt.Println(ru.Path)
 						files = append(files, cleanUrl(ru.String()))
 						continue
 					}
