@@ -116,6 +116,7 @@ func run() error {
 							if a.Key == "srcset" {
 								srcs := strings.Split(a.Val, ",")
 								for _, src := range srcs {
+									src = strings.TrimSpace(src)
 									splits := strings.Split(src, " ")
 									if len(splits) > 0 {
 										if !strings.HasPrefix(splits[0], "//") && (strings.HasPrefix(splits[0], "/") || strings.HasPrefix(splits[0], root)) {
