@@ -49,9 +49,8 @@ func run() error {
 		processed[file] = true
 		res, err := http.Get(root + file)
 		if err != nil {
-			fmt.Println(file, err)
+			fmt.Printf("error trying to download: %s, err: %v\n", file, err)
 			continue
-			return fmt.Errorf("error trying to download: %s, err: %w", file, err)
 		}
 		defer res.Body.Close()
 
