@@ -126,6 +126,9 @@ func run() error {
 								}
 							}
 						}
+						if n.DataAtom == atom.Style && strings.TrimSpace(n.FirstChild.Data) != "" {
+							files = parseCss(n.FirstChild.Data, root, file, rurl, files)
+						}
 					}
 				}
 				for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -136,38 +139,7 @@ func run() error {
 		} else if ext == ".css" {
 			var sb strings.Builder
 			io.Copy(&sb, io.TeeReader(res.Body, &buf))
-			sc := scanner.New(sb.String())
-			for {
-				token := sc.Next()
-				if token.Type == scanner.TokenEOF || token.Type == scanner.TokenError {
-					break
-				}
-				if token.Type == scanner.TokenURI {
-					value := strings.TrimPrefix(token.Value, "url(")
-					value = strings.TrimSuffix(value, ")")
-					value = strings.Trim(value, "\"")
-					value = strings.Trim(value, "'")
-					if strings.HasPrefix(value, "//"+rurl.Host) {
-						files = append(files, cleanUrl(rurl.Scheme+":"+value))
-						continue
-					}
-
-					if strings.HasPrefix(value, "//") {
-						continue
-					}
-					if strings.HasPrefix(value, root) {
-						files = append(files, cleanUrl(value))
-						continue
-					}
-
-					if strings.HasPrefix(value, "/") || strings.HasPrefix(value, ".") {
-						ru, _ := url.Parse(root)
-						ru.Path = path.Join(path.Dir(ru.Path+file), value)
-						files = append(files, cleanUrl(ru.String()))
-						continue
-					}
-				}
-			}
+			files = parseCss(sb.String(), root, file, rurl, files)
 		} else {
 			io.Copy(&buf, res.Body)
 		}
@@ -188,6 +160,43 @@ func run() error {
 	}
 
 	return nil
+}
+
+func parseCss(s, root, file string, rurl *url.URL, files []string) []string {
+	sc := scanner.New(s)
+	for {
+		token := sc.Next()
+		if token.Type == scanner.TokenEOF || token.Type == scanner.TokenError {
+			break
+		}
+		if token.Type == scanner.TokenURI {
+			value := strings.TrimPrefix(token.Value, "url(")
+			value = strings.TrimSuffix(value, ")")
+			value = strings.Trim(value, "\"")
+			value = strings.Trim(value, "'")
+			if strings.HasPrefix(value, "//"+rurl.Host) {
+				files = append(files, cleanUrl(rurl.Scheme+":"+value))
+				continue
+			}
+
+			if strings.HasPrefix(value, "//") {
+				continue
+			}
+			if strings.HasPrefix(value, root) {
+				files = append(files, cleanUrl(value))
+				continue
+			}
+
+			if strings.HasPrefix(value, "/") || strings.HasPrefix(value, ".") {
+				ru, _ := url.Parse(root)
+				ru.Path = path.Join(path.Dir(ru.Path+file), value)
+				files = append(files, cleanUrl(ru.String()))
+				continue
+			}
+		}
+	}
+
+	return files
 }
 
 func cleanUrl(s string) string {
