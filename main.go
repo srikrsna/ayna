@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -25,8 +26,17 @@ func main() {
 }
 
 func run() error {
+	var (
+		single = flag.Bool("single", false, "Single Page Mode")
+	)
+	flag.Parse()
+	
 	if len(os.Args) < 2 {
 		return fmt.Errorf("website name is required")
+	}
+
+	if *single {
+		return downloadPages()
 	}
 
 	root := os.Args[1]
@@ -68,73 +78,11 @@ func run() error {
 		buf.Reset()
 		ext := filepath.Ext(file)
 		if ext == "" || ext == ".html" || ext == ".htm" {
-			doc, err := html.ParseWithOptions(io.TeeReader(res.Body, &buf))
+			var err error
+			files, err = parseHtml(io.TeeReader(res.Body, &buf), root, file, rurl, files)
 			if err != nil {
 				return fmt.Errorf("invalid html returned from: %s", file)
 			}
-
-			var f func(n *html.Node)
-			f = func(n *html.Node) {
-				if n.Type == html.ElementNode {
-					switch n.DataAtom {
-					case atom.A:
-						for _, a := range n.Attr {
-							if a.Key == "href" {
-								if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
-									files = append(files, cleanUrl(a.Val))
-								}
-								break
-							}
-						}
-					case atom.Link:
-						var (
-							f     string
-							queue bool
-						)
-						for _, a := range n.Attr {
-							if a.Key == "href" {
-								if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
-									f = cleanUrl(a.Val)
-								}
-							}
-							if a.Key == "rel" && a.Val == "stylesheet" {
-								queue = true
-							}
-						}
-						if queue && f != "" {
-							files = append(files, f)
-						}
-					case atom.Script, atom.Style, atom.Img, atom.Source, atom.Audio, atom.Video:
-						for _, a := range n.Attr {
-							if a.Key == "src" || a.Key == "poster" {
-								if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
-									files = append(files, cleanUrl(a.Val))
-								}
-							}
-
-							if a.Key == "srcset" {
-								srcs := strings.Split(a.Val, ",")
-								for _, src := range srcs {
-									src = strings.TrimSpace(src)
-									splits := strings.Split(src, " ")
-									if len(splits) > 0 {
-										if !strings.HasPrefix(splits[0], "//") && (strings.HasPrefix(splits[0], "/") || strings.HasPrefix(splits[0], root)) {
-											files = append(files, cleanUrl(splits[0]))
-										}
-									}
-								}
-							}
-						}
-						if n.DataAtom == atom.Style && strings.TrimSpace(n.FirstChild.Data) != "" {
-							files = parseCss(n.FirstChild.Data, root, file, rurl, files)
-						}
-					}
-				}
-				for c := n.FirstChild; c != nil; c = c.NextSibling {
-					f(c)
-				}
-			}
-			f(doc)
 		} else if ext == ".css" {
 			var sb strings.Builder
 			io.Copy(&sb, io.TeeReader(res.Body, &buf))
@@ -159,6 +107,78 @@ func run() error {
 	}
 
 	return nil
+}
+
+func parseHtml(r io.Reader, root, file string, rurl *url.URL, files []string) ([]string, error) {
+	doc, err := html.ParseWithOptions(r)
+	if err != nil {
+		return nil, fmt.Errorf("invalid html returned from: %s", file)
+	}
+
+	var f func(n *html.Node)
+	f = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.DataAtom {
+			case atom.A:
+				for _, a := range n.Attr {
+					if a.Key == "href" {
+						if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
+							files = append(files, cleanUrl(a.Val))
+						}
+						break
+					}
+				}
+			case atom.Link:
+				var (
+					f     string
+					queue bool
+				)
+				for _, a := range n.Attr {
+					if a.Key == "href" {
+						if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
+							f = cleanUrl(a.Val)
+						}
+					}
+					if a.Key == "rel" && a.Val == "stylesheet" {
+						queue = true
+					}
+				}
+				if queue && f != "" {
+					files = append(files, f)
+				}
+			case atom.Script, atom.Style, atom.Img, atom.Source, atom.Audio, atom.Video:
+				for _, a := range n.Attr {
+					if a.Key == "src" || a.Key == "poster" {
+						if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
+							files = append(files, cleanUrl(a.Val))
+						}
+					}
+
+					if a.Key == "srcset" {
+						srcs := strings.Split(a.Val, ",")
+						for _, src := range srcs {
+							src = strings.TrimSpace(src)
+							splits := strings.Split(src, " ")
+							if len(splits) > 0 {
+								if !strings.HasPrefix(splits[0], "//") && (strings.HasPrefix(splits[0], "/") || strings.HasPrefix(splits[0], root)) {
+									files = append(files, cleanUrl(splits[0]))
+								}
+							}
+						}
+					}
+				}
+				if n.DataAtom == atom.Style && strings.TrimSpace(n.FirstChild.Data) != "" {
+					files = parseCss(n.FirstChild.Data, root, file, rurl, files)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+	}
+	f(doc)
+
+	return files, nil
 }
 
 func parseCss(s, root, file string, rurl *url.URL, files []string) []string {
@@ -208,4 +228,147 @@ func cleanUrl(s string) string {
 	u.Fragment = ""
 
 	return u.String()
+}
+
+func downloadPages() error {
+	for _, root := range os.Args[2:] {
+		root = strings.TrimSuffix(root, "/")
+		rurl, _ := url.Parse(root)
+		files := make([]string, 0, 100)
+		processed := make(map[string]bool)
+		files = append(files, root)
+		var (
+			buf      bytes.Buffer
+			rootDone bool
+		)
+
+		root = rurl.Scheme + "://" + rurl.Host
+		rurl, _ = url.Parse(root)
+
+		for len(files) > 0 {
+			file := files[0]
+			files = files[1:]
+
+			file = strings.TrimPrefix(file, root)
+			if processed[file] {
+				continue
+			}
+			ext := filepath.Ext(file)
+			processed[file] = true
+			if (ext == "" || ext == ".html" || ext == ".htm") && rootDone {
+				continue
+			}
+			rootDone = true
+			res, err := http.Get(root + file)
+			if err != nil {
+				fmt.Printf("error trying to download: %s, err: %v\n", file, err)
+				continue
+			}
+			defer res.Body.Close()
+
+			if res.StatusCode-200 > 100 {
+				if res.StatusCode == 404 {
+					continue
+				}
+				if res.StatusCode >= 500 {
+					fmt.Println(file, res.StatusCode)
+					continue
+				}
+				return fmt.Errorf("download: %v, returned a non success status code: %v", file, res.StatusCode)
+			}
+
+			buf.Reset()
+
+			if ext == "" || ext == ".html" || ext == ".htm" {
+				doc, err := html.ParseWithOptions(io.TeeReader(res.Body, &buf))
+				if err != nil {
+					return fmt.Errorf("invalid html returned from: %s", file)
+				}
+
+				var f func(n *html.Node)
+				f = func(n *html.Node) {
+					if n.Type == html.ElementNode {
+						switch n.DataAtom {
+						case atom.A:
+							for _, a := range n.Attr {
+								if a.Key == "href" {
+									if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
+										files = append(files, cleanUrl(a.Val))
+									}
+									break
+								}
+							}
+						case atom.Link:
+							var (
+								f     string
+								queue bool
+							)
+							for _, a := range n.Attr {
+								if a.Key == "href" {
+									if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
+										f = cleanUrl(a.Val)
+									}
+								}
+								if a.Key == "rel" && a.Val == "stylesheet" {
+									queue = true
+								}
+							}
+							if queue && f != "" {
+								files = append(files, f)
+							}
+						case atom.Script, atom.Style, atom.Img, atom.Source, atom.Audio, atom.Video:
+							for _, a := range n.Attr {
+								if a.Key == "src" || a.Key == "poster" {
+									if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
+										files = append(files, cleanUrl(a.Val))
+									}
+								}
+
+								if a.Key == "srcset" {
+									srcs := strings.Split(a.Val, ",")
+									for _, src := range srcs {
+										src = strings.TrimSpace(src)
+										splits := strings.Split(src, " ")
+										if len(splits) > 0 {
+											if !strings.HasPrefix(splits[0], "//") && (strings.HasPrefix(splits[0], "/") || strings.HasPrefix(splits[0], root)) {
+												files = append(files, cleanUrl(splits[0]))
+											}
+										}
+									}
+								}
+							}
+							if n.DataAtom == atom.Style && strings.TrimSpace(n.FirstChild.Data) != "" {
+								files = parseCss(n.FirstChild.Data, root, file, rurl, files)
+							}
+						}
+					}
+					for c := n.FirstChild; c != nil; c = c.NextSibling {
+						f(c)
+					}
+				}
+				f(doc)
+			} else if ext == ".css" {
+				var sb strings.Builder
+				io.Copy(&sb, io.TeeReader(res.Body, &buf))
+				files = parseCss(sb.String(), root, file, rurl, files)
+			} else {
+				io.Copy(&buf, res.Body)
+			}
+
+			res.Body.Close()
+
+			path := filepath.Join("root", file)
+			if ext == "" || ext == ".html" || ext == ".htm" {
+				path = filepath.Join(path, "index.html")
+			}
+
+			if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
+				return fmt.Errorf("unable to create a directory, err: %w", err)
+			}
+			if err := ioutil.WriteFile(path, buf.Bytes(), os.ModePerm); err != nil {
+				return fmt.Errorf("unable to write file to disk, err: %w", err)
+			}
+		}
+	}
+	return nil
 }
