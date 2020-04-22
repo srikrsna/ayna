@@ -30,7 +30,7 @@ func run() error {
 		single = flag.Bool("single", false, "Single Page Mode")
 	)
 	flag.Parse()
-	
+
 	if len(os.Args) < 2 {
 		return fmt.Errorf("website name is required")
 	}
@@ -122,6 +122,9 @@ func parseHtml(r io.Reader, root, file string, rurl *url.URL, files []string) ([
 			case atom.A:
 				for _, a := range n.Attr {
 					if a.Key == "href" {
+						if strings.HasPrefix(a.Val, "//") {
+							a.Val = rurl.Scheme + ":" + a.Val
+						}
 						if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
 							files = append(files, cleanUrl(a.Val))
 						}
@@ -135,6 +138,9 @@ func parseHtml(r io.Reader, root, file string, rurl *url.URL, files []string) ([
 				)
 				for _, a := range n.Attr {
 					if a.Key == "href" {
+						if strings.HasPrefix(a.Val, "//") {
+							a.Val = rurl.Scheme + ":" + a.Val
+						}
 						if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
 							f = cleanUrl(a.Val)
 						}
@@ -149,6 +155,9 @@ func parseHtml(r io.Reader, root, file string, rurl *url.URL, files []string) ([
 			case atom.Script, atom.Style, atom.Img, atom.Source, atom.Audio, atom.Video:
 				for _, a := range n.Attr {
 					if a.Key == "src" || a.Key == "poster" {
+						if strings.HasPrefix(a.Val, "//") {
+							a.Val = rurl.Scheme + ":" + a.Val
+						}
 						if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
 							files = append(files, cleanUrl(a.Val))
 						}
@@ -160,6 +169,9 @@ func parseHtml(r io.Reader, root, file string, rurl *url.URL, files []string) ([
 							src = strings.TrimSpace(src)
 							splits := strings.Split(src, " ")
 							if len(splits) > 0 {
+								if strings.HasPrefix(splits[0], "//") {
+									splits[0] = rurl.Scheme + ":" + splits[0]
+								}
 								if !strings.HasPrefix(splits[0], "//") && (strings.HasPrefix(splits[0], "/") || strings.HasPrefix(splits[0], root)) {
 									files = append(files, cleanUrl(splits[0]))
 								}
@@ -280,73 +292,11 @@ func downloadPages() error {
 			buf.Reset()
 
 			if ext == "" || ext == ".html" || ext == ".htm" {
-				doc, err := html.ParseWithOptions(io.TeeReader(res.Body, &buf))
+				var err error
+				files, err = parseHtml(io.TeeReader(res.Body, &buf), root, file, rurl, files)
 				if err != nil {
 					return fmt.Errorf("invalid html returned from: %s", file)
 				}
-
-				var f func(n *html.Node)
-				f = func(n *html.Node) {
-					if n.Type == html.ElementNode {
-						switch n.DataAtom {
-						case atom.A:
-							for _, a := range n.Attr {
-								if a.Key == "href" {
-									if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
-										files = append(files, cleanUrl(a.Val))
-									}
-									break
-								}
-							}
-						case atom.Link:
-							var (
-								f     string
-								queue bool
-							)
-							for _, a := range n.Attr {
-								if a.Key == "href" {
-									if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
-										f = cleanUrl(a.Val)
-									}
-								}
-								if a.Key == "rel" && a.Val == "stylesheet" {
-									queue = true
-								}
-							}
-							if queue && f != "" {
-								files = append(files, f)
-							}
-						case atom.Script, atom.Style, atom.Img, atom.Source, atom.Audio, atom.Video:
-							for _, a := range n.Attr {
-								if a.Key == "src" || a.Key == "poster" {
-									if !strings.HasPrefix(a.Val, "//") && (strings.HasPrefix(a.Val, "/") || strings.HasPrefix(a.Val, root)) {
-										files = append(files, cleanUrl(a.Val))
-									}
-								}
-
-								if a.Key == "srcset" {
-									srcs := strings.Split(a.Val, ",")
-									for _, src := range srcs {
-										src = strings.TrimSpace(src)
-										splits := strings.Split(src, " ")
-										if len(splits) > 0 {
-											if !strings.HasPrefix(splits[0], "//") && (strings.HasPrefix(splits[0], "/") || strings.HasPrefix(splits[0], root)) {
-												files = append(files, cleanUrl(splits[0]))
-											}
-										}
-									}
-								}
-							}
-							if n.DataAtom == atom.Style && strings.TrimSpace(n.FirstChild.Data) != "" {
-								files = parseCss(n.FirstChild.Data, root, file, rurl, files)
-							}
-						}
-					}
-					for c := n.FirstChild; c != nil; c = c.NextSibling {
-						f(c)
-					}
-				}
-				f(doc)
 			} else if ext == ".css" {
 				var sb strings.Builder
 				io.Copy(&sb, io.TeeReader(res.Body, &buf))
